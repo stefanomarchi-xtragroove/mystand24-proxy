@@ -31,6 +31,45 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", service: "MyStand24 Proxy" });
 });
 
+// ── Endpoint Claude (Anthropic) ───────────────────────────────────────────────
+
+app.post("/api/analyze", async (req, res) => {
+  try {
+    const { messages } = req.body;
+    if (!messages) return res.status(400).json({ error: "Campo 'messages' mancante." });
+
+    const claudeKey = process.env.ANTHROPIC_API_KEY;
+    if (!claudeKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY non configurata sul server." });
+
+    console.log(`[${new Date().toISOString()}] Richiesta analisi Claude`);
+
+    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type":         "application/json",
+        "x-api-key":            claudeKey,
+        "anthropic-version":    "2023-06-01",
+      },
+      body: JSON.stringify({
+        model:      "claude-sonnet-4-6",
+        max_tokens: 600,
+        messages,
+      }),
+    });
+
+    const claudeData = await claudeRes.json();
+    if (!claudeRes.ok) {
+      console.error("Errore Claude:", claudeData);
+      return res.status(claudeRes.status).json({ error: claudeData?.error?.message || "Errore Claude." });
+    }
+
+    res.json(claudeData);
+  } catch (err) {
+    console.error("Errore server /api/analyze:", err);
+    res.status(500).json({ error: "Errore interno del server." });
+  }
+});
+
 // ── Endpoint DALL-E 3 ─────────────────────────────────────────────────────────
 
 app.post("/api/render", async (req, res) => {
