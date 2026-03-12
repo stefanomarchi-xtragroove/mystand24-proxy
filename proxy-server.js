@@ -22,7 +22,7 @@ app.use(express.json({ limit: "10mb" }));
 // In sviluppo puoi usare "*", in produzione specifica il tuo dominio
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || "*",
-  methods: ["POST", "OPTIONS"],
+  methods: ["GET", "POST", "OPTIONS"],
 }));
 
 // ── Health check ──────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ app.post("/api/analyze", async (req, res) => {
       },
       body: JSON.stringify({
         model:      "claude-sonnet-4-6",
-        max_tokens: 600,
+        max_tokens: 2000,
         messages,
       }),
     });
@@ -67,6 +67,37 @@ app.post("/api/analyze", async (req, res) => {
   } catch (err) {
     console.error("Errore server /api/analyze:", err);
     res.status(500).json({ error: "Errore interno del server." });
+  }
+});
+
+// ── Endpoint brand lookup (DuckDuckGo + Clearbit logo) ───────────────────────
+
+app.get("/api/lookup", async (req, res) => {
+  const domain = (req.query.domain || "").trim().toLowerCase().replace(/^https?:\/\//,"").replace(/\/.*/,"");
+  if (!domain) return res.status(400).json({ error: "Parametro 'domain' mancante." });
+
+  const logoUrl = `https://logo.clearbit.com/${domain}`;
+  const website = `https://${domain}`;
+
+  try {
+    // DuckDuckGo Instant Answer API (public, no auth)
+    const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(domain)}&format=json&no_html=1&skip_disambig=1`;
+    const ddgRes = await fetch(ddgUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; MyStand24Bot/1.0)" },
+    });
+    const ddg = await ddgRes.json();
+
+    res.json({
+      logoUrl,
+      website,
+      abstract:  ddg.Abstract   || "",
+      heading:   ddg.Heading    || "",
+      ddgImage:  ddg.Image      || "",
+      websiteUrl: ddg.AbstractURL || website,
+    });
+  } catch(e) {
+    // Fallback: ritorna solo logo Clearbit
+    res.json({ logoUrl, website, abstract: "", heading: "" });
   }
 });
 
