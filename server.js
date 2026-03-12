@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy per DALL-E 3
+ * MyStand24 — Backend Proxy per DALL-E 3 
  * ----------------------------------------
  * Questo server riceve le richieste dal tuo sito (o dall'artifact),
  * aggiunge la API key OpenAI, e le inoltra a OpenAI.
