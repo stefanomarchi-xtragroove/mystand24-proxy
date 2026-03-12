@@ -209,7 +209,7 @@ app.post("/api/render", async (req, res) => {
 // ── Avvio ─────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.1 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}\n`);
 });
