@@ -8,7 +8,7 @@
  * Flusso rendering:
  *   Browser cattura SVG isometrico → base64 PNG
  *   POST /api/render { prompt, imageBase64 }
- *   → upload su fal.ai storage → FLUX img2img
+ * Rendering img2img: foto base64 passata come data URL direttamente a FLUX
  *   → ritorna URL immagine fotorealistica coerente col 3D
  */
 
@@ -106,28 +106,7 @@ app.get("/api/lookup", async (req, res) => {
   }
 });
 
-// ── fal.ai upload helper ──────────────────────────────────────────────────────
-
-async function uploadToFalStorage(base64Data, mimeType, falKey) {
-  const buffer = Buffer.from(base64Data, "base64");
-
-  const uploadRes = await fetch("https://fal.run/storage/upload", {
-    method: "POST",
-    headers: {
-      "Authorization": `Key ${falKey}`,
-      "Content-Type":  mimeType,
-    },
-    body: buffer,
-  });
-
-  if (!uploadRes.ok) {
-    const err = await uploadRes.text();
-    throw new Error(`fal storage upload failed (${uploadRes.status}): ${err}`);
-  }
-
-  const { url } = await uploadRes.json();
-  return url;
-}
+// ── fal.ai: nessun upload separato, FLUX accetta data URL direttamente ─────
 
 // ── fal.ai FLUX img2img ───────────────────────────────────────────────────────
 
@@ -166,17 +145,15 @@ app.post("/api/render", async (req, res) => {
     let endpoint, falBody;
 
     if (imageBase64) {
-      // Carica il rendering isometrico su fal storage
-      console.log(`  Uploading base image (${Math.round(imageBase64.length / 1024)}KB)...`);
-      const baseImageUrl = await uploadToFalStorage(imageBase64, mimeType, falKey);
-      console.log(`  Uploaded: ${baseImageUrl}`);
+      // Passa la foto come data URL — FLUX accetta base64 inline, nessun upload
+      const dataUrl = `data:${mimeType};base64,${imageBase64}`;
+      console.log(`  img2img via data URL (${Math.round(imageBase64.length / 1024)}KB)`);
 
-      // FLUX img2img: trasforma il rendering 3D SVG in fotorealismo
       endpoint = "https://fal.run/fal-ai/flux-pro/v1.1-ultra";
       falBody = {
         prompt,
-        image_url:           baseImageUrl,
-        strength:            0.65,   // con foto reale: bassa = mantiene contesto hall   // mantiene struttura, aggiunge fotorealismo
+        image_url:           dataUrl,
+        strength:            0.72,
         image_size:          "landscape_16_9",
         num_inference_steps: 28,
         guidance_scale:      3.5,
