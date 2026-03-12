@@ -176,7 +176,7 @@ app.post("/api/render", async (req, res) => {
       falBody = {
         prompt,
         image_url:           baseImageUrl,
-        strength:            0.78,   // mantiene struttura, aggiunge fotorealismo
+        strength:            0.65,   // con foto reale: bassa = mantiene contesto hall   // mantiene struttura, aggiunge fotorealismo
         image_size:          "landscape_16_9",
         num_inference_steps: 28,
         guidance_scale:      3.5,
