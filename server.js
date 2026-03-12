@@ -133,14 +133,35 @@ async function uploadToFalStorage(base64Data, mimeType, falKey) {
 
 app.post("/api/render", async (req, res) => {
   try {
-    const { prompt, imageBase64, mimeType = "image/png" } = req.body;
+    const { prompt, imageBase64, mimeType = "image/png", engine = "flux" } = req.body;
 
     if (!prompt) return res.status(400).json({ error: "Campo prompt mancante." });
 
+    console.log(`[${new Date().toISOString()}] render | engine=${engine} | img2img=${!!imageBase64} | prompt: ${prompt.slice(0, 80)}...`);
+
+    // ── DALL-E 3 branch ──────────────────────────────────────────────────────
+    if (engine === "dalle") {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) return res.status(500).json({ error: "OPENAI_API_KEY non configurata sul server." });
+
+      const openaiRes = await fetch("https://api.openai.com/v1/images/generations", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: "dall-e-3", prompt: prompt.slice(0, 4000), n: 1, size: "1792x1024", quality: "hd" }),
+      });
+      const openaiData = await openaiRes.json();
+      if (!openaiRes.ok) {
+        console.error("Errore DALL-E:", openaiData);
+        return res.status(openaiRes.status).json({ error: openaiData?.error?.message || "Errore DALL-E." });
+      }
+      const imageUrl = openaiData.data?.[0]?.url;
+      if (!imageUrl) return res.status(500).json({ error: "Nessuna immagine da DALL-E." });
+      return res.json({ url: imageUrl, engine: "dalle" });
+    }
+
+    // ── fal.ai FLUX branch ───────────────────────────────────────────────────
     const falKey = process.env.FAL_API_KEY;
     if (!falKey) return res.status(500).json({ error: "FAL_API_KEY non configurata sul server." });
-
-    console.log(`[${new Date().toISOString()}] fal.ai render | img2img=${!!imageBase64} | prompt: ${prompt.slice(0, 80)}...`);
 
     let endpoint, falBody;
 
