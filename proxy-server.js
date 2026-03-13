@@ -24,9 +24,9 @@ app.get("/", (req, res) => res.json({ status: "ok", service: "MyStand24 Proxy" }
 
 app.get("/api/status", (req, res) => res.json({
   status:        "ok",
-  version:       "3.3.0",
+  version:       "3.4.0",
   engine:        "fal.ai FLUX.1-pro img2img",
-  lookup:        "web scrape + LinkedIn + AI rielaborazione IT",
+  lookup:        "web scrape + payoff + AI rielaborazione IT",
   anthropic_key: process.env.ANTHROPIC_API_KEY ? "ok" : "MANCANTE",
   fal_key:       process.env.FAL_API_KEY       ? "ok" : "MANCANTE",
   openai_key:    process.env.OPENAI_API_KEY    ? "ok" : "non configurata",
@@ -167,7 +167,32 @@ app.get("/api/lookup", async (req, res) => {
       const ogImage = getMeta(html, "og:image", "twitter:image");
       const favicon = getFavicon(html, siteUrl);
       const contacts = extractContacts(html);
-      return { title, desc, ogImage, favicon, ...contacts };
+
+      // Payoff / tagline: cerca og:site_name, slogan schema.org, o testo dopo il trattino nel <title>
+      let payoff = "";
+      // 1. schema.org slogan
+      const sloganRe = /"slogan"\s*:\s*"([^"]{5,120})"/i;
+      const sm = html.match(sloganRe);
+      if (sm) payoff = sm[1].trim();
+      // 2. og:site_name diverso dal titolo
+      if (!payoff) {
+        const siteName = getMeta(html, "og:site_name");
+        if (siteName && siteName !== title && siteName.length < 80) payoff = siteName;
+      }
+      // 3. <title> spesso ha formato "Azienda | Payoff" o "Azienda - Payoff"
+      if (!payoff) {
+        const rawTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || "";
+        const sep = rawTitle.match(/[|\-–—·]/);
+        if (sep) {
+          const parts = rawTitle.split(sep[0]).map(p => p.trim());
+          // il payoff è la parte che NON assomiglia al dominio
+          const domainBase = domain.replace(/\.(com|it|eu|net|org)$/, "");
+          const candidate = parts.find(p => p.length > 4 && !p.toLowerCase().includes(domainBase.toLowerCase()));
+          if (candidate && candidate !== title) payoff = candidate;
+        }
+      }
+
+      return { title, desc, ogImage, favicon, payoff, ...contacts };
     } catch (e) { console.warn("  website scrape failed:", e.message); return {}; }
   };
 
@@ -221,20 +246,16 @@ app.get("/api/lookup", async (req, res) => {
   console.log(`  → logo: ${logoUrl.slice(0,60)} | phone: ${web.phone||"—"} | addr: ${(web.address||"—").slice(0,40)} | linkedin: ${linkedin.linkedInUrl||"n/a"}`);
 
   res.json({
-    // campi usati dal frontend esistente
     logoUrl,
     website:      siteUrl,
+    websiteUrl:   siteUrl,
     abstract,
     heading:      companyName,
-    websiteUrl:   siteUrl,
-    // nuovi campi
-    linkedInUrl:  linkedin.linkedInUrl  || "",
-    linkedInDesc: linkedin.linkedInDesc || "",
-    ogImage:      web.ogImage  || "",
-    favicon:      web.favicon  || clearbitLogo,
     companyName,
-    phone:        web.phone   || "",
+    payoff:       web.payoff  || "",
     address:      web.address || "",
+    ogImage:      web.ogImage || "",
+    favicon:      web.favicon || clearbitLogo,
   });
 });
 
@@ -292,7 +313,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.3 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.4 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}\n`);
 });
