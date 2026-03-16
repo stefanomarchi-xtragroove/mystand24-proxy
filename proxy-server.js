@@ -1,16 +1,18 @@
 /**
- * MyStand24 — Backend Proxy v3.3
+ * MyStand24 — Backend Proxy v3.5
  * ────────────────────────────────
  * GET  /              → health check
- * GET  /api/status    → stato chiavi
- * POST /api/analyze   → Anthropic Claude (analisi stand)
- * GET  /api/lookup    → brand info: scrape sito + LinkedIn + rielaborazione AI in italiano
+ * GET  /api/status    → stato chiavi + knowledge caricata
+ * POST /api/analyze   → Claude architetto (system prompt da knowledge.md + web search cliente)
+ * GET  /api/lookup    → brand info: scrape sito + payoff + AI rewrite IT
  * POST /api/render    → fal.ai FLUX.1-pro img2img
  */
 
 const express = require("express");
 const cors    = require("cors");
 const fetch   = require("node-fetch");
+const fs      = require("fs");
+const path    = require("path");
 require("dotenv").config();
 
 const app  = express();
@@ -19,36 +21,156 @@ const PORT = process.env.PORT || 3001;
 app.use(express.json({ limit: "25mb" }));
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*", methods: ["GET","POST","OPTIONS"] }));
 
+// ── Carica knowledge.md ───────────────────────────────────────────────────────
+let KNOWLEDGE = "";
+const KNOWLEDGE_PATH = path.join(__dirname, "knowledge.md");
+
+function loadKnowledge() {
+  try {
+    if (fs.existsSync(KNOWLEDGE_PATH)) {
+      KNOWLEDGE = fs.readFileSync(KNOWLEDGE_PATH, "utf8");
+      console.log(`📚 knowledge.md caricata (${KNOWLEDGE.length} chars)`);
+    } else {
+      console.warn("⚠️  knowledge.md non trovata — verrà usato solo il prompt base");
+    }
+  } catch (e) {
+    console.error("Errore lettura knowledge.md:", e.message);
+  }
+}
+loadKnowledge();
+// Ricarica senza riavvio (ogni 5 minuti — utile su Render)
+setInterval(loadKnowledge, 5 * 60 * 1000);
+
+// ── System prompt per Claude architetto ──────────────────────────────────────
+function buildSystemPrompt() {
+  return `Sei un architetto fieristico creativo senior che lavora per MyStand24, azienda specializzata in stand modulari per fiere ed eventi.
+
+Il tuo compito è analizzare le foto dello stand attuale del cliente e proporre una soluzione stand con il sistema Vector di MyStand24 — audace, scenografica, perfettamente calibrata sul brand del cliente.
+
+${KNOWLEDGE ? `---\n${KNOWLEDGE}\n---` : ""}
+
+## Formato di risposta (JSON puro, nessun testo fuori dal JSON)
+Rispondi SEMPRE e SOLO con un oggetto JSON valido con questa struttura esatta:
+{
+  "clientName": "nome azienda rilevato dalle foto o dal contesto",
+  "clientIndustry": "settore rilevato",
+  "clientDomain": "dominio sito web se visibile (es: azienda.com), altrimenti stringa vuota",
+  "model": {
+    "id": "id-modello",
+    "name": "Nome Modello",
+    "w": larghezza_numerica,
+    "d": profondità_numerica,
+    "type": "island|peninsula|inline|corner"
+  },
+  "colors": ["#hex1", "#hex2", "#hex3"],
+  "marketingNarrative": "Testo evocativo 2-3 frasi che descrive la visione progettuale, in italiano, tono entusiasta e professionale",
+  "displaySuggestion": "Descrizione dettagliata degli elementi accessori consigliati e perché, con riferimenti specifici al settore e al brand del cliente",
+  "webResearch": "Cosa hai trovato cercando il cliente online — stand precedenti, presenza fieristica, competitor, elementi di brand da valorizzare. Stringa vuota se non hai trovato nulla.",
+  "designRationale": "Spiegazione delle scelte progettuali principali: struttura a ponte sì/no e perché, retroilluminazione dove e perché, altezze scelte, elemento scenografico sorpresa"
+}`;
+}
+
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({ status: "ok", service: "MyStand24 Proxy" }));
 
 app.get("/api/status", (req, res) => res.json({
   status:        "ok",
-  version:       "3.4.0",
+  version:       "3.5.0",
   engine:        "fal.ai FLUX.1-pro img2img",
-  lookup:        "web scrape + payoff + AI rielaborazione IT",
+  knowledge:     KNOWLEDGE ? `caricata (${KNOWLEDGE.length} chars)` : "non trovata",
   anthropic_key: process.env.ANTHROPIC_API_KEY ? "ok" : "MANCANTE",
   fal_key:       process.env.FAL_API_KEY       ? "ok" : "MANCANTE",
-  openai_key:    process.env.OPENAI_API_KEY    ? "ok" : "non configurata",
 }));
+
+// ── Ricerca web cliente (DuckDuckGo) ──────────────────────────────────────────
+async function searchClientOnline(clientName, domain) {
+  if (!clientName || clientName === "il tuo brand") return "";
+  try {
+    const queries = [
+      `${clientName} fiera stand fieristico`,
+      domain ? `${domain} exhibition stand trade show` : `${clientName} trade show booth`,
+    ];
+    const results = [];
+    for (const q of queries) {
+      const r = await fetch(
+        `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`,
+        { headers: { "User-Agent": "MyStand24Bot/1.0" }, signal: AbortSignal.timeout(4000) }
+      );
+      const d = await r.json();
+      if (d.Abstract) results.push(d.Abstract);
+      (d.RelatedTopics || []).slice(0, 2).forEach(t => { if (t.Text) results.push(t.Text); });
+    }
+    return results.slice(0, 4).join(" | ");
+  } catch (e) {
+    console.warn("  web search failed:", e.message);
+    return "";
+  }
+}
 
 // ── Claude analyze ────────────────────────────────────────────────────────────
 app.post("/api/analyze", async (req, res) => {
   try {
-    const { messages } = req.body;
+    const { messages, clientName, clientDomain } = req.body;
     if (!messages) return res.status(400).json({ error: "messages mancante" });
+
     const key = process.env.ANTHROPIC_API_KEY;
     if (!key) return res.status(500).json({ error: "ANTHROPIC_API_KEY non configurata" });
-    console.log(`[${new Date().toISOString()}] /api/analyze`);
+
+    console.log(`[${new Date().toISOString()}] /api/analyze | client: ${clientName || "?"}`);
+
+    // Cerca il cliente online in parallelo mentre prepariamo la chiamata
+    const webResearch = await searchClientOnline(clientName, clientDomain);
+    if (webResearch) {
+      console.log(`  web research: ${webResearch.slice(0, 80)}…`);
+    }
+
+    // Inietta la web research nell'ultimo messaggio utente se disponibile
+    let finalMessages = messages;
+    if (webResearch) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === "user") {
+        // Aggiungi la research come contesto aggiuntivo
+        const researchNote = `\n\n[RICERCA WEB SUL CLIENTE: ${webResearch}]`;
+        if (typeof lastMsg.content === "string") {
+          finalMessages = [
+            ...messages.slice(0, -1),
+            { ...lastMsg, content: lastMsg.content + researchNote }
+          ];
+        } else if (Array.isArray(lastMsg.content)) {
+          // Aggiungi come blocco testo aggiuntivo
+          finalMessages = [
+            ...messages.slice(0, -1),
+            { ...lastMsg, content: [...lastMsg.content, { type: "text", text: researchNote }] }
+          ];
+        }
+      }
+    }
+
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method:  "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body:    JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, messages }),
+      headers: {
+        "Content-Type":      "application/json",
+        "x-api-key":         key,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model:      "claude-sonnet-4-6",
+        max_tokens: 2000,
+        system:     buildSystemPrompt(),
+        messages:   finalMessages,
+      }),
     });
+
     const data = await r.json();
-    if (!r.ok) { console.error("Claude error:", data); return res.status(r.status).json({ error: data?.error?.message || "Errore Claude" }); }
+    if (!r.ok) {
+      console.error("Claude error:", data);
+      return res.status(r.status).json({ error: data?.error?.message || "Errore Claude" });
+    }
     res.json(data);
-  } catch (e) { console.error("/api/analyze:", e); res.status(500).json({ error: "Errore interno" }); }
+  } catch (e) {
+    console.error("/api/analyze:", e);
+    res.status(500).json({ error: "Errore interno" });
+  }
 });
 
 // ── Helpers scraping ──────────────────────────────────────────────────────────
@@ -78,16 +200,10 @@ function getFavicon(html, baseUrl) {
   return baseUrl + "/" + href;
 }
 
-// Estrae telefono e indirizzo con regex semplici
 function extractContacts(html) {
-  // Telefono: cerca pattern tipo +39 02 1234567, 02-1234567, +390212345678
   const phoneRe = /(?:\+39[\s.-]?)?(?:0\d{1,4}[\s.-]?\d{4,8}|\+\d{10,14})/g;
   const phones = [...new Set((html.replace(/<[^>]+>/g, " ").match(phoneRe) || [])
-    .map(p => p.trim())
-    .filter(p => p.replace(/\D/g, "").length >= 8)
-  )].slice(0, 2);
-
-  // Indirizzo: cerca JSON-LD schema.org (più affidabile)
+    .map(p => p.trim()).filter(p => p.replace(/\D/g, "").length >= 8))].slice(0, 2);
   let address = "";
   const jsonLdRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let jm;
@@ -98,15 +214,13 @@ function extractContacts(html) {
       for (const e of entries) {
         const addr = e.address || e.location?.address;
         if (addr) {
-          const parts = [addr.streetAddress, addr.postalCode, addr.addressLocality, addr.addressCountry]
-            .filter(Boolean).join(", ");
+          const parts = [addr.streetAddress, addr.postalCode, addr.addressLocality, addr.addressCountry].filter(Boolean).join(", ");
           if (parts.length > 5) { address = parts; break; }
         }
       }
-    } catch { /* JSON non valido, ignora */ }
+    } catch { }
     if (address) break;
   }
-
   return { phone: phones[0] || "", address };
 }
 
@@ -117,7 +231,6 @@ async function fetchWithTimeout(url, opts = {}, ms = 7000) {
   finally { clearTimeout(t); }
 }
 
-// Rielabora il testo in italiano fluente con Claude
 async function rewriteInItalian(rawText, companyName, claudeKey) {
   if (!rawText || !claudeKey) return rawText;
   try {
@@ -127,18 +240,12 @@ async function rewriteInItalian(rawText, companyName, claudeKey) {
       body: JSON.stringify({
         model:      "claude-haiku-4-5-20251001",
         max_tokens: 120,
-        messages: [{
-          role:    "user",
-          content: `Riscrivi questa descrizione aziendale in italiano fluente e professionale, massimo 2 frasi concise. Solo il testo riscritto, niente altro.\n\nAzienda: ${companyName}\nTesto originale: ${rawText}`,
-        }],
+        messages: [{ role: "user", content: `Riscrivi in italiano fluente e professionale, massimo 2 frasi. Solo il testo riscritto.\n\nAzienda: ${companyName}\nTesto: ${rawText}` }],
       }),
     }, 8000);
     const data = await r.json();
     return data?.content?.[0]?.text?.trim() || rawText;
-  } catch (e) {
-    console.warn("  rewrite failed:", e.message);
-    return rawText;
-  }
+  } catch { return rawText; }
 }
 
 // ── Brand lookup ──────────────────────────────────────────────────────────────
@@ -153,50 +260,39 @@ app.get("/api/lookup", async (req, res) => {
 
   console.log(`[${new Date().toISOString()}] /api/lookup → ${domain}`);
 
-  // ── 1. Scrape sito web ─────────────────────────────────────────────────────
   const scrapeWebsite = async () => {
     try {
       const r = await fetchWithTimeout(siteUrl, {
         headers: { "User-Agent": "Mozilla/5.0 (compatible; MyStand24Bot/1.0)", "Accept": "text/html" },
       });
       if (!r.ok) return {};
-      const html  = await r.text();
-      const title = getMeta(html, "og:title", "twitter:title")
-                 || html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || "";
+      const html    = await r.text();
+      const title   = getMeta(html, "og:title", "twitter:title") || html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || "";
       const desc    = getMeta(html, "og:description", "twitter:description", "description");
       const ogImage = getMeta(html, "og:image", "twitter:image");
       const favicon = getFavicon(html, siteUrl);
       const contacts = extractContacts(html);
-
-      // Payoff / tagline: cerca og:site_name, slogan schema.org, o testo dopo il trattino nel <title>
       let payoff = "";
-      // 1. schema.org slogan
-      const sloganRe = /"slogan"\s*:\s*"([^"]{5,120})"/i;
-      const sm = html.match(sloganRe);
+      const sm = html.match(/"slogan"\s*:\s*"([^"]{5,120})"/i);
       if (sm) payoff = sm[1].trim();
-      // 2. og:site_name diverso dal titolo
       if (!payoff) {
         const siteName = getMeta(html, "og:site_name");
         if (siteName && siteName !== title && siteName.length < 80) payoff = siteName;
       }
-      // 3. <title> spesso ha formato "Azienda | Payoff" o "Azienda - Payoff"
       if (!payoff) {
         const rawTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || "";
         const sep = rawTitle.match(/[|\-–—·]/);
         if (sep) {
           const parts = rawTitle.split(sep[0]).map(p => p.trim());
-          // il payoff è la parte che NON assomiglia al dominio
           const domainBase = domain.replace(/\.(com|it|eu|net|org)$/, "");
           const candidate = parts.find(p => p.length > 4 && !p.toLowerCase().includes(domainBase.toLowerCase()));
           if (candidate && candidate !== title) payoff = candidate;
         }
       }
-
       return { title, desc, ogImage, favicon, payoff, ...contacts };
     } catch (e) { console.warn("  website scrape failed:", e.message); return {}; }
   };
 
-  // ── 2. LinkedIn via DuckDuckGo ─────────────────────────────────────────────
   const scrapeLinkedIn = async () => {
     try {
       const query = encodeURIComponent(`${domain} site:linkedin.com/company`);
@@ -205,57 +301,35 @@ app.get("/api/lookup", async (req, res) => {
         { headers: { "User-Agent": "MyStand24Bot/1.0" } }
       );
       const ddg = await r.json();
-      let linkedInUrl  = "";
-      let linkedInDesc = ddg.Abstract || "";
+      let linkedInUrl = "", linkedInDesc = ddg.Abstract || "";
       for (const t of (ddg.RelatedTopics || [])) {
         if ((t.FirstURL || "").includes("linkedin.com/company")) {
-          linkedInUrl  = t.FirstURL;
-          linkedInDesc = linkedInDesc || t.Text || "";
-          break;
+          linkedInUrl = t.FirstURL; linkedInDesc = linkedInDesc || t.Text || ""; break;
         }
       }
       if (!linkedInUrl) {
         const slug = domain.replace(/\.(com|it|eu|net|org|co\.\w+)$/, "").replace(/\./g, "-");
         linkedInUrl = `https://www.linkedin.com/company/${slug}`;
       }
-      // Tenta scrape diretto LinkedIn
-      try {
-        const lr = await fetchWithTimeout(linkedInUrl, {
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept-Language": "it-IT" },
-        }, 5000);
-        if (lr.ok) {
-          const lhtml = await lr.text();
-          const ldesc = getMeta(lhtml, "og:description", "description");
-          if (ldesc) linkedInDesc = ldesc;
-        }
-      } catch { /* bloccato, ignora */ }
       return { linkedInUrl, linkedInDesc };
-    } catch (e) { console.warn("  LinkedIn lookup failed:", e.message); return {}; }
+    } catch { return {}; }
   };
 
-  // ── Esegui in parallelo ────────────────────────────────────────────────────
   const [web, linkedin] = await Promise.all([scrapeWebsite(), scrapeLinkedIn()]);
-
-  // ── Scegli il testo migliore e rielabora in italiano ──────────────────────
   const rawDesc   = web.desc || linkedin.linkedInDesc || "";
   const companyName = web.title || domain;
   const abstract  = rawDesc ? await rewriteInItalian(rawDesc, companyName, claudeKey) : "";
+  const logoUrl   = web.ogImage || web.favicon || clearbitLogo;
 
-  const logoUrl = web.ogImage || web.favicon || clearbitLogo;
-
-  console.log(`  → logo: ${logoUrl.slice(0,60)} | phone: ${web.phone||"—"} | addr: ${(web.address||"—").slice(0,40)} | linkedin: ${linkedin.linkedInUrl||"n/a"}`);
+  console.log(`  → logo: ${logoUrl.slice(0,60)} | payoff: ${(web.payoff||"—").slice(0,40)}`);
 
   res.json({
-    logoUrl,
-    website:      siteUrl,
-    websiteUrl:   siteUrl,
-    abstract,
-    heading:      companyName,
-    companyName,
-    payoff:       web.payoff  || "",
-    address:      web.address || "",
-    ogImage:      web.ogImage || "",
-    favicon:      web.favicon || clearbitLogo,
+    logoUrl, website: siteUrl, websiteUrl: siteUrl,
+    abstract, heading: companyName, companyName,
+    payoff:   web.payoff  || "",
+    address:  web.address || "",
+    ogImage:  web.ogImage || "",
+    favicon:  web.favicon || clearbitLogo,
   });
 });
 
@@ -267,53 +341,38 @@ app.post("/api/render", async (req, res) => {
     const falKey = process.env.FAL_API_KEY;
     if (!falKey) return res.status(500).json({ error: "FAL_API_KEY non configurata" });
 
-    console.log(`[${new Date().toISOString()}] /api/render | img2img=${!!imageBase64} | ${Math.round((imageBase64||"").length/1024)}KB | prompt: ${prompt.slice(0,60)}…`);
+    console.log(`[${new Date().toISOString()}] /api/render | img2img=${!!imageBase64} | ${Math.round((imageBase64||"").length/1024)}KB`);
 
     let endpoint, body;
     if (imageBase64) {
       endpoint = "https://fal.run/fal-ai/flux-pro/v1.1-ultra";
-      body = {
-        prompt,
-        image_url:           `data:${mimeType};base64,${imageBase64}`,
-        strength:            0.72,
-        image_size:          "landscape_16_9",
-        num_inference_steps: 28,
-        guidance_scale:      3.5,
-        output_format:       "jpeg",
-        safety_tolerance:    "5",
-      };
+      body = { prompt, image_url: `data:${mimeType};base64,${imageBase64}`, strength: 0.72,
+               image_size: "landscape_16_9", num_inference_steps: 28, guidance_scale: 3.5,
+               output_format: "jpeg", safety_tolerance: "5" };
     } else {
       endpoint = "https://fal.run/fal-ai/flux-pro";
-      body = {
-        prompt,
-        image_size:          "landscape_16_9",
-        num_inference_steps: 28,
-        guidance_scale:      3.5,
-        output_format:       "jpeg",
-        safety_tolerance:    "5",
-      };
+      body = { prompt, image_size: "landscape_16_9", num_inference_steps: 28,
+               guidance_scale: 3.5, output_format: "jpeg", safety_tolerance: "5" };
     }
 
     const falRes  = await fetch(endpoint, {
-      method:  "POST",
+      method: "POST",
       headers: { "Authorization": `Key ${falKey}`, "Content-Type": "application/json" },
-      body:    JSON.stringify(body),
+      body: JSON.stringify(body),
     });
     const falData = await falRes.json();
-    if (!falRes.ok) {
-      console.error("fal.ai error:", JSON.stringify(falData).slice(0,300));
-      return res.status(falRes.status).json({ error: falData?.detail || falData?.message || `fal.ai error ${falRes.status}` });
-    }
+    if (!falRes.ok) return res.status(falRes.status).json({ error: falData?.detail || falData?.message || `fal.ai error ${falRes.status}` });
     const url = falData?.images?.[0]?.url;
     if (!url) return res.status(500).json({ error: "Nessuna immagine da fal.ai" });
     console.log(`  → ${url}`);
     res.json({ url });
-  } catch (e) { console.error("/api/render:", e.message); res.status(500).json({ error: e.message || "Errore interno" }); }
+  } catch (e) { res.status(500).json({ error: e.message || "Errore interno" }); }
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.4 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.5 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
-  console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}\n`);
+  console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
+  console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
 });
