@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.5
+ * MyStand24 — Backend Proxy v3.5.1
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -64,7 +64,7 @@ app.get("/", (req, res) => res.json({ status: "ok", service: "MyStand24 Proxy" }
 
 app.get("/api/status", (req, res) => res.json({
   status:        "ok",
-  version:       "3.5.0",
+  version:       "3.5.1",
   engine:        "fal.ai FLUX.1-pro img2img",
   knowledge:     KNOWLEDGE ? `caricata (${KNOWLEDGE.length} chars)` : "non trovata",
   anthropic_key: process.env.ANTHROPIC_API_KEY ? "ok" : "MANCANTE",
