@@ -374,11 +374,12 @@ Pareti espositive complete, autonome, per background fotografici o comunicazione
 
 ---
 
-### APPENDIMENTI (strutture sospese — solo in fiere che lo consentono)
+### APPENDIMENTI (strutture sospese dal soffitto del padiglione)
 
-Strutture in alluminio tubolare con grafica tessuto, da appendere al soffitto del padiglione.
+Strutture in alluminio tubolare con grafica tessuto, agganciate al soffitto del padiglione fieristico.
+Completano lo stand Vector con visibilità aerea — il brand è riconoscibile da tutto il padiglione.
 
-⚠️ **Nota importante**: gli appendimenti richiedono autorizzazione della fiera e punti di ancoraggio al soffitto. NON fanno parte del sistema Vector auto-portante. Proporre solo se il cliente ha confermato la disponibilità del padiglione.
+**Proporre sempre** quando lo stand esistente li ha già, o quando il padiglione è affollato e la visibilità dall'alto è importante.
 
 | Modello | Forma | Dimensioni |
 |---|---|---|
@@ -428,7 +429,7 @@ Lightbox autonomi con grafica SEG retroilluminata, diversi formati.
 2. **I totem vanno agli ingressi** — guidano visivamente il flusso verso l'interno.
 3. **I roll-up completano i lati aperti** — non lasciano mai un fianco "vuoto e anonimo".
 4. **I fondali magnetici** sono consigliati per brand con campagne stagionali frequenti.
-5. **Gli appendimenti** vanno proposti solo come opzione aggiuntiva, con nota sulla necessità di verifica con la fiera.
+5. **Gli appendimenti** vanno proposti quando visibili nello stand esistente o quando utili per visibilità aerea — sono prodotti MyStand24 da incentivare.
 6. **I porta depliant** vanno sempre inclusi se il cliente ha materiale fisico da distribuire.
 7. **I frame retroilluminati** autonomi possono rafforzare l'impatto anche in stand piccoli.
 
