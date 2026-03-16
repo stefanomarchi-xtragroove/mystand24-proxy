@@ -43,31 +43,20 @@ setInterval(loadKnowledge, 5 * 60 * 1000);
 
 // ── System prompt per Claude architetto ──────────────────────────────────────
 function buildSystemPrompt() {
-  return `Sei un architetto fieristico creativo senior che lavora per MyStand24, azienda specializzata in stand modulari per fiere ed eventi.
-
-Il tuo compito è analizzare le foto dello stand attuale del cliente e proporre una soluzione stand con il sistema Vector di MyStand24 — audace, scenografica, perfettamente calibrata sul brand del cliente.
-
-${KNOWLEDGE ? `---\n${KNOWLEDGE}\n---` : ""}
-
-## Formato di risposta (JSON puro, nessun testo fuori dal JSON)
-Rispondi SEMPRE e SOLO con un oggetto JSON valido con questa struttura esatta:
-{
-  "clientName": "nome azienda rilevato dalle foto o dal contesto",
-  "clientIndustry": "settore rilevato",
-  "clientDomain": "dominio sito web se visibile (es: azienda.com), altrimenti stringa vuota",
-  "model": {
-    "id": "id-modello",
-    "name": "Nome Modello",
-    "w": larghezza_numerica,
-    "d": profondità_numerica,
-    "type": "island|peninsula|inline|corner"
-  },
-  "colors": ["#hex1", "#hex2", "#hex3"],
-  "marketingNarrative": "Testo evocativo 2-3 frasi che descrive la visione progettuale, in italiano, tono entusiasta e professionale",
-  "displaySuggestion": "Descrizione dettagliata degli elementi accessori consigliati e perché, con riferimenti specifici al settore e al brand del cliente",
-  "webResearch": "Cosa hai trovato cercando il cliente online — stand precedenti, presenza fieristica, competitor, elementi di brand da valorizzare. Stringa vuota se non hai trovato nulla.",
-  "designRationale": "Spiegazione delle scelte progettuali principali: struttura a ponte sì/no e perché, retroilluminazione dove e perché, altezze scelte, elemento scenografico sorpresa"
-}`;
+  // Cap knowledge to avoid token overflow when combined with large image messages
+  const k = KNOWLEDGE ? KNOWLEDGE.slice(0, 12000) : "";
+  const knowledgeBlock = k ? "---\n" + k + "\n---" : "";
+  return "Sei un architetto fieristico creativo senior che lavora per MyStand24, specializzata in stand modulari per fiere ed eventi.\n\n"
+    + "Il tuo compito: analizzare le foto dello stand del cliente e proporre una soluzione con il sistema Vector MyStand24 — audace, scenografica, calibrata sul brand.\n\n"
+    + knowledgeBlock
+    + "\n\nRispondi SEMPRE e SOLO con JSON valido, nessun testo fuori dal JSON:\n"
+    + "{ \"clientName\": \"nome azienda\", \"clientIndustry\": \"settore\", \"clientDomain\": \"dominio o stringa vuota\","
+    + " \"model\": { \"id\": \"id-modello\", \"name\": \"Nome\", \"w\": 0, \"d\": 0, \"type\": \"angolo\" },"
+    + " \"colors\": [\"#hex1\", \"#hex2\"],"
+    + " \"marketingNarrative\": \"testo evocativo 2-3 frasi italiano\","
+    + " \"displaySuggestion\": \"accessori MyStand24 + posizione + motivazione\","
+    + " \"webResearch\": \"info online sul cliente o stringa vuota\","
+    + " \"designRationale\": \"spiegazione scelte progettuali\" }";
 }
 
 // ── Health ────────────────────────────────────────────────────────────────────
@@ -155,7 +144,7 @@ app.post("/api/analyze", async (req, res) => {
       },
       body: JSON.stringify({
         model:      "claude-sonnet-4-6",
-        max_tokens: 2000,
+        max_tokens: 3000,
         system:     buildSystemPrompt(),
         messages:   finalMessages,
       }),
@@ -371,7 +360,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.5 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.5.1 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
