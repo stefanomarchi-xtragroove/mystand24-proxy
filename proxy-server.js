@@ -322,6 +322,21 @@ app.get("/api/lookup", async (req, res) => {
   });
 });
 
+// ── Image proxy (bypass CORS for fal.ai CDN images) ─────────────────────────
+app.get("/api/proxy-image", async (req, res) => {
+  const url = req.query.url;
+  if (!url || !url.startsWith("https://")) return res.status(400).json({ error: "url mancante" });
+  try {
+    const r = await fetch(url, { headers: { "User-Agent": "MyStand24Bot/1.0" } });
+    if (!r.ok) return res.status(r.status).json({ error: "fetch failed" });
+    const buf = await r.buffer();
+    const ct = r.headers.get("content-type") || "image/jpeg";
+    res.set("Content-Type", ct);
+    res.set("Access-Control-Allow-Origin", "*");
+    res.send(buf);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── fal.ai FLUX img2img ───────────────────────────────────────────────────────
 app.post("/api/render", async (req, res) => {
   try {
@@ -360,7 +375,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.5.1 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.6.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
