@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.8.0
+ * MyStand24 — Backend Proxy v3.9.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -64,7 +64,7 @@ app.get("/", (req, res) => res.json({ status: "ok", service: "MyStand24 Proxy" }
 
 app.get("/api/status", (req, res) => res.json({
   status:        "ok",
-  version:       "3.8.0",
+  version:       "3.9.0",
   engine:        "fal.ai FLUX.1-pro img2img",
   knowledge:     KNOWLEDGE ? `caricata (${KNOWLEDGE.length} chars)` : "non trovata",
   anthropic_key: process.env.ANTHROPIC_API_KEY ? "ok" : "MANCANTE",
@@ -365,6 +365,28 @@ async function fetchTxtContent(fileId, apiKey) {
   } catch { return null; }
 }
 
+// Rewrite description in marketing language via Claude Haiku
+async function marketingRewrite(text, modelName, claudeKey) {
+  if (!text || !claudeKey) return text;
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": claudeKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 150,
+        messages: [{ role: "user", content: `Riscrivi questa descrizione tecnica di uno stand fieristico in italiano, tono marketing entusiasta, massimo 2 frasi. Solo il testo riscritto, niente altro.
+
+Stand: ${modelName}
+Descrizione: ${text}` }],
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const d = await r.json();
+    return d?.content?.[0]?.text?.trim() || text;
+  } catch { return text; }
+}
+
 // GET /api/catalog → lista modelli con dimensioni e descrizione
 app.get("/api/catalog", async (req, res) => {
   const apiKey = process.env.GOOGLE_DRIVE_API_KEY;
@@ -389,10 +411,11 @@ app.get("/api/catalog", async (req, res) => {
         const thumb = imgs[0];
         const dims  = parseDimensions(folder.name);
 
-        // Fetch description from txt if present
+        // Fetch description from txt and rewrite in marketing language
         let description = null;
         if (txts.length > 0) {
-          description = await fetchTxtContent(txts[0].id, apiKey);
+          const raw = await fetchTxtContent(txts[0].id, apiKey);
+          if (raw) description = await marketingRewrite(raw, folder.name, process.env.ANTHROPIC_API_KEY);
         }
 
         return {
@@ -428,7 +451,11 @@ app.get("/api/catalog/:folderId", async (req, res) => {
     const imgs = files.filter(f => f.mimeType.startsWith("image/"));
     const txts = files.filter(f => f.name.endsWith(".txt") || f.mimeType === "text/plain");
     let description = null;
-    if (txts.length > 0) description = await fetchTxtContent(txts[0].id, apiKey);
+    if (txts.length > 0) {
+      const raw = await fetchTxtContent(txts[0].id, apiKey);
+      const folderName = req.params.folderId; // use id as fallback name
+      if (raw) description = await marketingRewrite(raw, folderName, process.env.ANTHROPIC_API_KEY);
+    }
 
     res.json({
       description,
@@ -480,7 +507,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.8.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.9.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
