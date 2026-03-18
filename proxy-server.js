@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.6.0
+ * MyStand24 — Backend Proxy v3.8.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -64,7 +64,7 @@ app.get("/", (req, res) => res.json({ status: "ok", service: "MyStand24 Proxy" }
 
 app.get("/api/status", (req, res) => res.json({
   status:        "ok",
-  version:       "3.6.0",
+  version:       "3.8.0",
   engine:        "fal.ai FLUX.1-pro img2img",
   knowledge:     KNOWLEDGE ? `caricata (${KNOWLEDGE.length} chars)` : "non trovata",
   anthropic_key: process.env.ANTHROPIC_API_KEY ? "ok" : "MANCANTE",
@@ -322,7 +322,7 @@ app.get("/api/lookup", async (req, res) => {
   });
 });
 
-// ── Image proxy (bypass CORS for fal.ai CDN images) ─────────────────────────
+// ── Image proxy (bypass CORS) ─────────────────────────────────────────────────
 app.get("/api/proxy-image", async (req, res) => {
   const url = req.query.url;
   if (!url || !url.startsWith("https://")) return res.status(400).json({ error: "url mancante" });
@@ -334,6 +334,111 @@ app.get("/api/proxy-image", async (req, res) => {
     res.set("Content-Type", ct);
     res.set("Access-Control-Allow-Origin", "*");
     res.send(buf);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Google Drive catalog ───────────────────────────────────────────────────────
+const CATALOG_FOLDER_ID = "1BEN8SAwV-TehL_2obMv5P4wIzNTVVjXr";
+
+async function driveList(q, apiKey, fields = "files(id,name,mimeType)") {
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=name&pageSize=100&key=${apiKey}`;
+  const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) throw new Error(`Drive API ${r.status}: ${await r.text()}`);
+  return (await r.json()).files || [];
+}
+
+// Parse WxD dimensions from folder name — e.g. "Beauty Corner 3x3" → { w:3, d:3 }
+function parseDimensions(name) {
+  const m = name.match(/(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)/i);
+  if (!m) return null;
+  return { w: parseFloat(m[1].replace(",",".")), d: parseFloat(m[2].replace(",",".")) };
+}
+
+// Fetch text content of a Drive file by id
+async function fetchTxtContent(fileId, apiKey) {
+  try {
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${apiKey}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return null;
+    const text = await r.text();
+    return text.trim().slice(0, 800) || null;
+  } catch { return null; }
+}
+
+// GET /api/catalog → lista modelli con dimensioni e descrizione
+app.get("/api/catalog", async (req, res) => {
+  const apiKey = process.env.GOOGLE_DRIVE_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: "GOOGLE_DRIVE_API_KEY non configurata" });
+  try {
+    const folders = await driveList(
+      `'${CATALOG_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      apiKey
+    );
+
+    const models = await Promise.all(folders.map(async folder => {
+      try {
+        // Get all files in folder (images + txt)
+        const files = await driveList(
+          `'${folder.id}' in parents and trashed=false`,
+          apiKey,
+          "files(id,name,mimeType)"
+        );
+        const imgs = files.filter(f => f.mimeType.startsWith("image/"));
+        const txts = files.filter(f => f.name.endsWith(".txt") || f.mimeType === "text/plain");
+
+        const thumb = imgs[0];
+        const dims  = parseDimensions(folder.name);
+
+        // Fetch description from txt if present
+        let description = null;
+        if (txts.length > 0) {
+          description = await fetchTxtContent(txts[0].id, apiKey);
+        }
+
+        return {
+          id:          folder.id,
+          name:        folder.name,
+          dims,                              // { w, d } or null
+          thumbUrl:    thumb ? `https://drive.google.com/thumbnail?id=${thumb.id}&sz=w400` : null,
+          count:       imgs.length,
+          description,
+        };
+      } catch(e) {
+        return { id: folder.id, name: folder.name, dims: null, thumbUrl: null, count: 0, description: null };
+      }
+    }));
+
+    res.json({ models: models.filter(m => m.thumbUrl) });
+  } catch(e) {
+    console.error("/api/catalog:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/catalog/:folderId → tutte le immagini + descrizione di un modello
+app.get("/api/catalog/:folderId", async (req, res) => {
+  const apiKey = process.env.GOOGLE_DRIVE_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: "GOOGLE_DRIVE_API_KEY non configurata" });
+  try {
+    const files = await driveList(
+      `'${req.params.folderId}' in parents and trashed=false`,
+      apiKey,
+      "files(id,name,mimeType)"
+    );
+    const imgs = files.filter(f => f.mimeType.startsWith("image/"));
+    const txts = files.filter(f => f.name.endsWith(".txt") || f.mimeType === "text/plain");
+    let description = null;
+    if (txts.length > 0) description = await fetchTxtContent(txts[0].id, apiKey);
+
+    res.json({
+      description,
+      images: imgs.map(f => ({
+        id:       f.id,
+        name:     f.name,
+        url:      `https://drive.google.com/thumbnail?id=${f.id}&sz=w1200`,
+        thumbUrl: `https://drive.google.com/thumbnail?id=${f.id}&sz=w400`,
+      }))
+    });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -350,7 +455,7 @@ app.post("/api/render", async (req, res) => {
     let endpoint, body;
     if (imageBase64) {
       endpoint = "https://fal.run/fal-ai/flux-pro/v1.1-ultra";
-      body = { prompt, image_url: `data:${mimeType};base64,${imageBase64}`, strength: 0.72,
+      body = { prompt, image_url: `data:${mimeType};base64,${imageBase64}`, strength: 0.45,
                image_size: "landscape_16_9", num_inference_steps: 28, guidance_scale: 3.5,
                output_format: "jpeg", safety_tolerance: "5" };
     } else {
@@ -375,7 +480,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.6.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.8.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
