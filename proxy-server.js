@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.9.0
+ * MyStand24 — Backend Proxy v3.10.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -411,11 +411,14 @@ app.get("/api/catalog", async (req, res) => {
         const thumb = imgs[0];
         const dims  = parseDimensions(folder.name);
 
-        // Fetch description from txt and rewrite in marketing language
+        // Fetch description from txt sequentially — ensures all folders are read
         let description = null;
-        if (txts.length > 0) {
-          const raw = await fetchTxtContent(txts[0].id, apiKey);
-          if (raw) description = await marketingRewrite(raw, folder.name, process.env.ANTHROPIC_API_KEY);
+        for (const txt of txts) {
+          const raw = await fetchTxtContent(txt.id, apiKey);
+          if (raw) {
+            description = await marketingRewrite(raw, folder.name, process.env.ANTHROPIC_API_KEY);
+            break; // use first valid txt
+          }
         }
 
         return {
@@ -448,13 +451,22 @@ app.get("/api/catalog/:folderId", async (req, res) => {
       apiKey,
       "files(id,name,mimeType)"
     );
-    const imgs = files.filter(f => f.mimeType.startsWith("image/"));
+    let imgs = files.filter(f => f.mimeType.startsWith("image/"));
     const txts = files.filter(f => f.name.endsWith(".txt") || f.mimeType === "text/plain");
+
+    // Sort: file ending in -1 (e.g. "stand-1.jpg") comes first
+    imgs.sort((a, b) => {
+      const aIs1 = /[-_]1\.[^.]+$/.test(a.name);
+      const bIs1 = /[-_]1\.[^.]+$/.test(b.name);
+      if (aIs1 && !bIs1) return -1;
+      if (!aIs1 && bIs1) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
     let description = null;
     if (txts.length > 0) {
       const raw = await fetchTxtContent(txts[0].id, apiKey);
-      const folderName = req.params.folderId; // use id as fallback name
-      if (raw) description = await marketingRewrite(raw, folderName, process.env.ANTHROPIC_API_KEY);
+      if (raw) description = await marketingRewrite(raw, req.params.folderId, process.env.ANTHROPIC_API_KEY);
     }
 
     res.json({
@@ -507,7 +519,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.9.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.10.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
