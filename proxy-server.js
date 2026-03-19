@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.13.0
+ * MyStand24 — Backend Proxy v3.14.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -417,10 +417,13 @@ app.get("/api/catalog", async (req, res) => {
   const apiKey = process.env.GOOGLE_DRIVE_API_KEY;
   if (!apiKey) return res.status(500).json({ error: "GOOGLE_DRIVE_API_KEY non configurata" });
   try {
-    const folders = await driveList(
+    const foldersRaw = await driveList(
       `'${CATALOG_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       apiKey
     );
+    // Deduplicate by folder ID (Drive API can return duplicates)
+    const seen = new Set();
+    const folders = foldersRaw.filter(f => { if (seen.has(f.id)) return false; seen.add(f.id); return true; });
 
     const models = await Promise.all(folders.map(async folder => {
       try {
@@ -607,7 +610,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.13.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.14.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
