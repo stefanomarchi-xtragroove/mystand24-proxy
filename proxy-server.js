@@ -9,6 +9,31 @@
  */
 
 const express = require("express");
+
+// ── HTML entity decoder ────────────────────────────────────────────────────────
+function decodeHtml(str) {
+  if (!str) return str;
+  return String(str)
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&eacute;/g, "é")
+    .replace(/&egrave;/g, "è")
+    .replace(/&agrave;/g, "à")
+    .replace(/&ugrave;/g, "ù")
+    .replace(/&iacute;/g, "í")
+    .replace(/&oacute;/g, "ó")
+    .replace(/&ntilde;/g, "ñ")
+    .replace(/&ccedil;/g, "ç")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .trim();
+}
 const cors    = require("cors");
 const fetch   = require("node-fetch");
 const fs      = require("fs");
