@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.11.0
+ * MyStand24 — Backend Proxy v3.12.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -210,7 +210,7 @@ function extractContacts(html) {
     } catch { }
     if (address) break;
   }
-  return { phone: phones[0] || "", address };
+  return { phone: phones[0] || "", address: decodeHtml(address) };
 }
 
 async function fetchWithTimeout(url, opts = {}, ms = 7000) {
@@ -315,8 +315,8 @@ app.get("/api/lookup", async (req, res) => {
   res.json({
     logoUrl, website: siteUrl, websiteUrl: siteUrl,
     abstract, heading: companyName, companyName,
-    payoff:   web.payoff  || "",
-    address:  web.address || "",
+    payoff:   decodeHtml(web.payoff  || ""),
+    address:  decodeHtml(web.address || ""),
     ogImage:  web.ogImage || "",
     favicon:  web.favicon || clearbitLogo,
   });
@@ -574,7 +574,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.11.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.12.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
