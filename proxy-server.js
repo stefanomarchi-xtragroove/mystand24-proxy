@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.10.0
+ * MyStand24 — Backend Proxy v3.11.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -481,6 +481,61 @@ app.get("/api/catalog/:folderId", async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Simple text generation (no JSON, no knowledge prompt) ────────────────────
+app.post("/api/describe", async (req, res) => {
+  const { prompt } = req.body || {};
+  if (!prompt) return res.status(400).json({ error: "prompt mancante" });
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type":  "application/json",
+        "x-api-key":     process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model:      "claude-haiku-4-5-20251001",
+        max_tokens: 400,
+        messages:   [{ role: "user", content: prompt }],
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "API error" });
+    const text = (data.content || []).map(b => b.text || "").join("").trim();
+    res.json({ text });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Free-text generation (no JSON schema) ────────────────────────────────────
+app.post("/api/describe", async (req, res) => {
+  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_API_KEY) return res.status(500).json({ error: "ANTHROPIC_API_KEY mancante" });
+  const { prompt, systemPrompt } = req.body || {};
+  if (!prompt) return res.status(400).json({ error: "prompt mancante" });
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type":    "application/json",
+        "x-api-key":       ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model:      "claude-haiku-4-5-20251001",
+        max_tokens: 600,
+        system:     systemPrompt || "Sei un architetto fieristico esperto. Rispondi sempre e solo con testo discorsivo in italiano. MAI JSON. MAI codice. MAI elenchi numerati.",
+        messages:   [{ role: "user", content: prompt }],
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    const d = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: d?.error?.message || "Errore API" });
+    const text = d?.content?.[0]?.text || "";
+    res.json({ text });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── fal.ai FLUX img2img ───────────────────────────────────────────────────────
 app.post("/api/render", async (req, res) => {
   try {
@@ -519,7 +574,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.10.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.11.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
