@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.12.0
+ * MyStand24 — Backend Proxy v3.13.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -433,6 +433,14 @@ app.get("/api/catalog", async (req, res) => {
         const imgs = files.filter(f => f.mimeType.startsWith("image/"));
         const txts = files.filter(f => f.name.endsWith(".txt") || f.mimeType === "text/plain");
 
+        // Prefer image ending in -1 (e.g. stand-1.jpg) as thumbnail
+        imgs.sort((a, b) => {
+          const aIs1 = /[-_]1\.[^.]+$/.test(a.name);
+          const bIs1 = /[-_]1\.[^.]+$/.test(b.name);
+          if (aIs1 && !bIs1) return -1;
+          if (!aIs1 && bIs1) return 1;
+          return a.name.localeCompare(b.name);
+        });
         const thumb = imgs[0];
         const dims  = parseDimensions(folder.name);
 
@@ -450,7 +458,7 @@ app.get("/api/catalog", async (req, res) => {
           id:          folder.id,
           name:        folder.name,
           dims,                              // { w, d } or null
-          thumbUrl:    thumb ? `https://drive.google.com/thumbnail?id=${thumb.id}&sz=w400` : null,
+          thumbUrl:    thumb ? `https://drive.google.com/thumbnail?id=${thumb.id}&sz=w800` : null,
           count:       imgs.length,
           description,
         };
@@ -500,7 +508,7 @@ app.get("/api/catalog/:folderId", async (req, res) => {
         id:       f.id,
         name:     f.name,
         url:      `https://drive.google.com/thumbnail?id=${f.id}&sz=w1200`,
-        thumbUrl: `https://drive.google.com/thumbnail?id=${f.id}&sz=w400`,
+        thumbUrl: `https://drive.google.com/thumbnail?id=${f.id}&sz=w800`,
       }))
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -599,7 +607,7 @@ app.post("/api/render", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.12.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.13.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
