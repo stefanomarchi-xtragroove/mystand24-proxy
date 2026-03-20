@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.14.0
+ * MyStand24 — Backend Proxy v3.16.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -421,9 +421,15 @@ app.get("/api/catalog", async (req, res) => {
       `'${CATALOG_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       apiKey
     );
-    // Deduplicate by folder ID (Drive API can return duplicates)
-    const seen = new Set();
-    const folders = foldersRaw.filter(f => { if (seen.has(f.id)) return false; seen.add(f.id); return true; });
+    // Deduplicate by folder ID AND name (Drive can return duplicates)
+    const seenIds   = new Set();
+    const seenNames = new Set();
+    const folders = foldersRaw.filter(f => {
+      if (seenIds.has(f.id) || seenNames.has(f.name.trim().toLowerCase())) return false;
+      seenIds.add(f.id);
+      seenNames.add(f.name.trim().toLowerCase());
+      return true;
+    });
 
     const models = await Promise.all(folders.map(async folder => {
       try {
@@ -550,6 +556,8 @@ app.post("/api/describe", async (req, res) => {
   const { prompt, systemPrompt } = req.body || {};
   if (!prompt) return res.status(400).json({ error: "prompt mancante" });
   try {
+    // prompt can be a string or an array of content blocks (vision)
+    const content = Array.isArray(prompt) ? prompt : [{ type: "text", text: prompt }];
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -558,12 +566,12 @@ app.post("/api/describe", async (req, res) => {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model:      "claude-haiku-4-5-20251001",
-        max_tokens: 600,
-        system:     systemPrompt || "Sei un architetto fieristico esperto. Rispondi sempre e solo con testo discorsivo in italiano. MAI JSON. MAI codice. MAI elenchi numerati.",
-        messages:   [{ role: "user", content: prompt }],
+        model:      "claude-sonnet-4-6",
+        max_tokens: 800,
+        system:     systemPrompt || "Sei un architetto fieristico esperto di MyStand24. Rispondi sempre e solo con testo discorsivo in italiano. MAI JSON. MAI codice. MAI elenchi numerati. Se ti viene mostrata un immagine di uno stand, analizzala e usala come riferimento per la proposta.",
+        messages:   [{ role: "user", content }],
       }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(40000),
     });
     const d = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: d?.error?.message || "Errore API" });
@@ -608,9 +616,51 @@ app.post("/api/render", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message || "Errore interno" }); }
 });
 
+// ── nano-banana photorealistic rendering ─────────────────────────────────────
+// Takes iso wireframe as structure + user photos as graphic reference
+app.post("/api/render-photo", async (req, res) => {
+  try {
+    const { prompt, isoBase64, userPhotoBase64, mimeType = "image/jpeg" } = req.body;
+    if (!prompt) return res.status(400).json({ error: "prompt mancante" });
+    const falKey = process.env.FAL_API_KEY;
+    if (!falKey) return res.status(500).json({ error: "FAL_API_KEY non configurata" });
+
+    console.log(`[${new Date().toISOString()}] /api/render-photo | iso=${!!isoBase64} | photo=${!!userPhotoBase64}`);
+
+    // nano-banana-pro: takes image_url as structure base + prompt for style/content
+    const body = {
+      prompt,
+      image_url: `data:${mimeType};base64,${isoBase64}`,
+      strength: 0.82,
+      image_size: "landscape_16_9",
+      num_inference_steps: 30,
+      guidance_scale: 7,
+      output_format: "jpeg",
+      safety_tolerance: "5",
+    };
+
+    // If user photo provided, add as reference image (style/graphic reference)
+    if (userPhotoBase64) {
+      body.reference_image_url = `data:image/jpeg;base64,${userPhotoBase64}`;
+    }
+
+    const falRes = await fetch("https://fal.run/fal-ai/nano-banana-pro", {
+      method: "POST",
+      headers: { "Authorization": `Key ${falKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const falData = await falRes.json();
+    if (!falRes.ok) return res.status(falRes.status).json({ error: falData?.detail || falData?.message || `fal.ai error ${falRes.status}` });
+    const url = falData?.images?.[0]?.url;
+    if (!url) return res.status(500).json({ error: "Nessuna immagine da fal.ai" });
+    console.log(`  → ${url}`);
+    res.json({ url });
+  } catch (e) { res.status(500).json({ error: e.message || "Errore interno" }); }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.14.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.16.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
