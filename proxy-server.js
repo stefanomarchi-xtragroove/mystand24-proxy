@@ -1,5 +1,5 @@
 /**
- * MyStand24 — Backend Proxy v3.16.0
+ * MyStand24 — Backend Proxy v3.17.0
  * ────────────────────────────────
  * GET  /              → health check
  * GET  /api/status    → stato chiavi + knowledge caricata
@@ -363,7 +363,8 @@ app.get("/api/proxy-image", async (req, res) => {
 });
 
 // ── Google Drive catalog ───────────────────────────────────────────────────────
-const CATALOG_FOLDER_ID = "1BEN8SAwV-TehL_2obMv5P4wIzNTVVjXr";
+const CATALOG_FOLDER_ID    = "1BEN8SAwV-TehL_2obMv5P4wIzNTVVjXr";
+const ACCESSORIES_FOLDER_ID = "1BdkWpQoLXS4wFsGRHzF_iVtGIkeUjVqu";
 
 async function driveList(q, apiKey, fields = "files(id,name,mimeType)") {
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent(fields)}&orderBy=name&pageSize=100&key=${apiKey}`;
@@ -616,6 +617,86 @@ app.post("/api/render", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message || "Errore interno" }); }
 });
 
+// ── Accessories catalog from Drive ───────────────────────────────────────────
+// Returns list of accessory categories with one representative image each
+app.get("/api/accessories", async (req, res) => {
+  const apiKey = process.env.GOOGLE_DRIVE_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: "GOOGLE_DRIVE_API_KEY non configurata" });
+  try {
+    const foldersRaw = await driveList(
+      `'${ACCESSORIES_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      apiKey
+    );
+    const seenIds = new Set();
+    const folders = foldersRaw.filter(f => { if(seenIds.has(f.id)) return false; seenIds.add(f.id); return true; });
+
+    const accessories = await Promise.all(folders.map(async folder => {
+      try {
+        const files = await driveList(
+          `'${folder.id}' in parents and trashed=false`,
+          apiKey, "files(id,name,mimeType)"
+        );
+        let imgs = files.filter(f => f.mimeType.startsWith("image/"));
+        // sort: -1 image first
+        imgs.sort((a,b) => {
+          const a1 = /[-_]1\.[^.]+$/.test(a.name);
+          const b1 = /[-_]1\.[^.]+$/.test(b.name);
+          if (a1&&!b1) return -1; if (!a1&&b1) return 1;
+          return a.name.localeCompare(b.name);
+        });
+        return {
+          id:       folder.id,
+          name:     folder.name,
+          thumbUrl: imgs[0] ? `https://drive.google.com/thumbnail?id=${imgs[0].id}&sz=w400` : null,
+          imageUrl: imgs[0] ? `https://drive.google.com/thumbnail?id=${imgs[0].id}&sz=w800` : null,
+          count:    imgs.length,
+          allUrls:  imgs.slice(0,3).map(f => `https://drive.google.com/thumbnail?id=${f.id}&sz=w800`),
+        };
+      } catch { return null; }
+    }));
+    res.json({ accessories: accessories.filter(a => a && a.thumbUrl) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── SeaDream 4.5 edit — applies brand graphics to stand model ────────────────
+app.post("/api/render-seedream", async (req, res) => {
+  try {
+    const { prompt, imageUrls } = req.body;
+    if (!prompt || !imageUrls?.length) return res.status(400).json({ error: "prompt e imageUrls richiesti" });
+    const falKey = process.env.FAL_API_KEY;
+    if (!falKey) return res.status(500).json({ error: "FAL_API_KEY non configurata" });
+
+    console.log(`[${new Date().toISOString()}] /api/render-seedream | images=${imageUrls.length}`);
+
+    // Upload base64 images to fal storage and get public URLs
+    const resolvedUrls = [];
+    for (const img of imageUrls) {
+      if (img.startsWith("data:") || img.startsWith("http")) {
+        resolvedUrls.push(img);
+      }
+    }
+
+    const falRes = await fetch("https://fal.run/fal-ai/bytedance/seedream/v4.5/edit", {
+      method: "POST",
+      headers: { "Authorization": `Key ${falKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        image_urls: resolvedUrls,
+        image_size: "landscape_16_9",
+        num_images: 1,
+        enable_safety_checker: false,
+        seed: 42,
+      }),
+    });
+    const falData = await falRes.json();
+    if (!falRes.ok) return res.status(falRes.status).json({ error: falData?.detail || falData?.message || `fal.ai error ${falRes.status}` });
+    const url = falData?.images?.[0]?.url;
+    if (!url) return res.status(500).json({ error: "Nessuna immagine da SeaDream" });
+    console.log(`  → ${url}`);
+    res.json({ url });
+  } catch(e) { res.status(500).json({ error: e.message || "Errore interno" }); }
+});
+
 // ── nano-banana photorealistic rendering ─────────────────────────────────────
 // Takes iso wireframe as structure + user photos as graphic reference
 app.post("/api/render-photo", async (req, res) => {
@@ -660,7 +741,7 @@ app.post("/api/render-photo", async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`\n✅  MyStand24 Proxy v3.16.0 — porta ${PORT}`);
+  console.log(`\n✅  MyStand24 Proxy v3.17.0 — porta ${PORT}`);
   console.log(`    ANTHROPIC_API_KEY : ${process.env.ANTHROPIC_API_KEY ? "✓" : "✗ MANCANTE"}`);
   console.log(`    FAL_API_KEY       : ${process.env.FAL_API_KEY       ? "✓" : "✗ MANCANTE"}`);
   console.log(`    knowledge.md      : ${KNOWLEDGE ? `✓ (${KNOWLEDGE.length} chars)` : "✗ non trovata"}\n`);
